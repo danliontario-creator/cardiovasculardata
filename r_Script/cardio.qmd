@@ -1,0 +1,148 @@
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(caret)
+library(corrplot)
+library(randomForest)
+library(MASS, exclude = "select")
+library(tidyverse)
+library(marginaleffects)
+library(broom)
+library(nnet)
+library(pROC)
+```
+
+```{r}
+cdv <-read.csv("~/Documents/cardiovasculardata/cardio_train.csv", sep=";")
+cdv
+```
+
+Data Cleaning
+
+```{r}
+cdv <- cdv %>% mutate(age_yr = round(age/365, 1))
+cdv <-cdv %>% mutate(bmi= weight/((height/100)^2))
+cdv <- cdv %>% mutate(high_bp= ifelse(ap_hi > 140 | ap_lo > 90, 1, 0))
+cdv <- cdv %>%
+  mutate(across(c(gender, smoke, alco, active, cardio, high_bp), as.factor))
+cdv <- cdv %>% filter(ap_hi > 50, ap_hi < 250, ap_lo > 30, ap_lo < 200)
+cdv <- cdv %>% filter(bmi > 10, bmi < 60)
+
+cdv
+```
+
+```{r}
+ggplot(cdv, aes(x = cardio)) +
+  geom_bar() +
+  labs(title = "Cardiovascular Disease Distribution")
+```
+
+```{r}
+ggplot(cdv, aes(x = cardio, y = age_yr, fill = cardio)) +
+  geom_boxplot() +
+  labs(title = "Age Distribution by Disease Status")
+```
+
+```{r}
+corr_vars <- cdv %>% select(age_yr, height, weight, ap_hi, ap_lo, bmi)
+corrplot(cor(corr_vars), method = "color", type = "upper", tl.col = "black")
+
+
+```
+
+```{r}
+set.seed(42)
+trainindex <- createDataPartition(cdv$cardio, p= 0.8, list = FALSE)
+train <- cdv[trainindex, ]
+test<- cdv[-trainindex, ]
+```
+
+```{r}
+cdv.1 <- glm(cardio ~ age_yr + gender + bmi + ap_hi + ap_lo +
+              cholesterol + gluc + smoke + alco + active,
+    data=train, family=binomial)
+
+summary(cdv.1)
+```
+
+```{r}
+roc_train <- roc(train$cardio, fitted(cdv.1))
+roc_test  <- roc(test$cardio, predict(cdv.1, newdata=test, type="response"))
+auc(roc_train); auc(roc_test)
+```
+
+```{r}
+plot(roc_train, main="ROC Curve: Train vs Test", lwd=2)
+lines(roc_test, lwd=2, lty=2)
+legend("bottomright",
+       legend=c("Train", "Test"),
+       lty=c(1,2), lwd=2)
+
+```
+
+```{r}
+cdv.2 <- glm(cardio ~ age_yr * bmi * cholesterol,
+             family = "binomial", data = cdv)
+summary(cdv.2)
+```
+
+```{r}
+
+
+# Age × BMI effect at average cholesterol
+plot_predictions(cdv.2, condition = c("age_yr", "bmi"))
+
+
+```
+
+```{r}
+ame_bmi_by_chol <- avg_comparisons(
+  cdv.2,
+  variables = "bmi",
+  by = "age_yr"
+)
+ame_bmi_by_chol 
+```
+
+```{r}
+cdv.3 <- glm(cardio ~ age_yr * bmi*gender,
+             family = "binomial", data = cdv)
+summary(cdv.3)
+```
+
+```{r}
+plot_predictions(cdv.3, condition = c("bmi", "gender"))
+```
+
+```{r}
+rf <- randomForest(cardio ~ age_yr + bmi + ap_hi + ap_lo + cholesterol + gluc + smoke + alco + active,
+                   data = train, ntree = 200, importance = TRUE)
+pred_rf <- predict(rf, newdata = test)
+confusionMatrix(pred_rf, test$cardio, positive = "1")
+varImpPlot(rf)
+
+```
+
+```{r}
+tuneRF(x =train[, -which(names(train) == "cardio")],
+       y = train$cardio,
+       stepFactor = 1.5,
+       improve = 0.01,
+       ntreeTry= 300)
+
+```
+
+```{r}
+rf_cv_test <- train(
+  cardio ~ age_yr + bmi + ap_hi + ap_lo,
+  data = train,
+  method = "rf",
+  trControl = trainControl(method = "cv", number = 3),
+  tuneGrid = expand.grid(mtry = 2:4),
+  ntree = 100
+)
+rf_cv_test
+
+
+
+```
